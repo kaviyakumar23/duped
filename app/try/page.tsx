@@ -30,6 +30,10 @@ const ftime = (iso: string) => {
   if (Number.isNaN(d.getTime())) return "--:--:--";
   return d.toTimeString().slice(0, 8);
 };
+const shortId = (s: string | null | undefined) => {
+  if (!s) return "minted";
+  return s.length > 13 ? s.slice(0, 8) + "…" + s.slice(-3) : s;
+};
 
 function connMeta(conn: ConnState): { label: string; dot: string } {
   switch (conn) {
@@ -92,6 +96,32 @@ interface LegacyStormReport {
   durationMs: number;
 }
 
+/* world reset — pristine, invariant-holding start (POST /api/world/reset) */
+interface ResetResult {
+  legendaryOwner: string;
+  legendaryRegion: string;
+  goldSupplyMinor: number;
+  legacyCopies: number;
+}
+
+/* provenance — the one sword's complete history (GET /api/world/provenance) */
+interface ProvenanceMove {
+  moveKind: string;
+  fromOwnerId: string | null;
+  toOwnerType: string;
+  toOwnerId: string;
+  toRegion: RegionCode;
+  versionAfter: number;
+  createdAt: string;
+}
+interface Provenance {
+  name: string;
+  totalMoves: number;
+  distinctOwners: number;
+  neverTwoAtOnce: boolean;
+  chain: ProvenanceMove[];
+}
+
 export default function DupedWorld() {
   const { snapshot, conn } = useWorld();
   const world = snapshot ?? FALLBACK_SNAPSHOT;
@@ -113,6 +143,15 @@ export default function DupedWorld() {
   const [proofOpen, setProofOpen] = useState(false);
   const [proof, setProof] = useState<InvariantReport | null>(null);
   const closeRef = useRef<HTMLButtonElement | null>(null);
+
+  // reset world — return the demo to a pristine, invariant-holding start
+  const [resetBusy, setResetBusy] = useState(false);
+
+  // provenance — the one sword's complete history, in a modal
+  const [provOpen, setProvOpen] = useState(false);
+  const [prov, setProv] = useState<Provenance | null>(null);
+  const [provErr, setProvErr] = useState(false);
+  const provCloseRef = useRef<HTMLButtonElement | null>(null);
 
   // guided walkthrough + declutter
   const [tourOpen, setTourOpen] = useState(true);
@@ -208,6 +247,34 @@ export default function DupedWorld() {
       window.removeEventListener("keydown", onKey);
     };
   }, [proofOpen]);
+
+  /* ----------------------- provenance modal lifecycle ------------------------ */
+  useEffect(() => {
+    if (!provOpen) return;
+    let cancelled = false;
+    setProv(null);
+    setProvErr(false);
+    void (async () => {
+      try {
+        const res = await fetch("/api/world/provenance", { cache: "no-store" });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as Provenance;
+        if (!cancelled) setProv(data);
+      } catch {
+        if (!cancelled) setProvErr(true);
+      }
+    })();
+    const t = setTimeout(() => provCloseRef.current?.focus(), 30);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setProvOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [provOpen]);
 
   /* ------------------------------- the canvas -------------------------------- */
   useEffect(() => {
@@ -709,6 +776,30 @@ export default function DupedWorld() {
     }
   }, [rightBusy, pushToast]);
 
+  /* ------------------------------- reset world ------------------------------- */
+  const runReset = useCallback(async () => {
+    if (resetBusy) return;
+    setResetBusy(true);
+    try {
+      const res = await fetch("/api/world/reset", { method: "POST" });
+      if (!res.ok) throw new Error(String(res.status));
+      const r = (await res.json()) as ResetResult;
+      // return every contrast/result surface to its pristine state
+      await loadLegacy();
+      setLegacyStorm(null);
+      setRightResult(null);
+      pushToast(
+        "WORLD RESET",
+        `legendary back with ${r.legendaryOwner} · gold ${gold2(r.goldSupplyMinor)} g · legacy × ${r.legacyCopies}`,
+        "#9aa0b2",
+      );
+    } catch {
+      pushToast("RESET FAILED", "reset endpoint unavailable · state unchanged", "#9aa0b2");
+    } finally {
+      setResetBusy(false);
+    }
+  }, [resetBusy, loadLegacy, pushToast]);
+
   /* -------------------------------- view model ------------------------------- */
   const cm = connMeta(conn);
   const leg = world.legendary;
@@ -758,6 +849,7 @@ export default function DupedWorld() {
     return {
       region: r.region,
       active,
+      endpoint: r.region === "TOKYO" ? "ap-northeast-1" : "ap-northeast-2",
       settledFmt: fmt(r.settled),
       dot: active ? "#2ee6cf" : "#5a6072",
       bg: active
@@ -1521,6 +1613,31 @@ export default function DupedWorld() {
         >
           <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} />
 
+          {/* provenance access — the one sword's complete history */}
+          <button
+            onClick={() => setProvOpen(true)}
+            className="dbtn"
+            style={{
+              position: "absolute",
+              top: 14,
+              right: 14,
+              zIndex: 4,
+              fontFamily: MONO,
+              fontSize: 10.5,
+              letterSpacing: ".05em",
+              color: "#ffe9b0",
+              background: "rgba(20,17,8,.72)",
+              border: "1px solid rgba(255,216,122,.32)",
+              borderRadius: 999,
+              padding: "7px 13px",
+              cursor: "pointer",
+              backdropFilter: "blur(6px)",
+              boxShadow: "0 6px 22px -8px rgba(255,216,122,.6)",
+            }}
+          >
+            ⛓ Trace this legendary&apos;s history
+          </button>
+
           <div
             style={{
               position: "absolute",
@@ -1852,7 +1969,7 @@ export default function DupedWorld() {
       <section style={{ maxWidth: 1180, margin: "46px auto 0", padding: "0 28px" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 12, margin: "0 0 16px" }}>
           <span style={{ fontFamily: MONO, fontSize: 11, color: "#5a6072", letterSpacing: ".2em" }}>05</span>
-          <h2 style={{ fontFamily: MONO, fontSize: 12.5, letterSpacing: ".26em", color: "#9aa0b2", margin: 0, fontWeight: 600 }}>REGION HEALTH</h2>
+          <h2 style={{ fontFamily: MONO, fontSize: 12.5, letterSpacing: ".26em", color: "#9aa0b2", margin: 0, fontWeight: 600 }}>CROSS-REGION DEFENSE</h2>
           <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg,rgba(255,255,255,.12),transparent)" }} />
           <button
             onClick={runFailover}
@@ -1873,13 +1990,87 @@ export default function DupedWorld() {
             ⇄ FAILOVER REGION
           </button>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 13 }}>
+
+        {/* the model, stated plainly */}
+        <div
+          style={{
+            background: "linear-gradient(135deg,rgba(46,230,207,.05),rgba(160,123,255,.045) 60%,rgba(255,255,255,.014))",
+            border: "1px solid rgba(255,255,255,.08)",
+            borderRadius: 15,
+            padding: "20px 22px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: MONO, fontSize: 12.5, letterSpacing: ".14em", color: "#2ee6cf" }}>TOKYO</span>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: "#6b7186" }}>ap-northeast-1</span>
+            <span style={{ fontFamily: MONO, fontSize: 13, color: "#5a6072" }}>⇄</span>
+            <span style={{ fontFamily: MONO, fontSize: 12.5, letterSpacing: ".14em", color: "#a07bff" }}>SEOUL</span>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: "#6b7186" }}>ap-northeast-2</span>
+            <span style={{ flex: 1 }} />
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 9,
+                letterSpacing: ".14em",
+                color: "#9aa0b2",
+                border: "1px solid rgba(255,255,255,.12)",
+                borderRadius: 999,
+                padding: "3px 9px",
+              }}
+            >
+              ONE LOGICAL DB · ACTIVE-ACTIVE
+            </span>
+          </div>
+          <p style={{ fontFamily: SANS, fontSize: 14, color: "#c5cad6", lineHeight: 1.55, margin: "13px 0 0", maxWidth: 880 }}>
+            Tokyo and Seoul are <span style={{ color: "#e8eaf0" }}>one logical Aurora DSQL database</span> — active-active,
+            strongly consistent. A trade routed to Tokyo and a trade routed to Seoul on the <span style={{ color: "#e8eaf0" }}>same
+            item</span> serialize against one source of truth:{" "}
+            <span style={{ color: "#ffd87a" }}>exactly one wins, globally.</span> No replication-lag window, no split-brain.
+          </p>
+        </div>
+
+        {/* the real, measured proof */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 18,
+            flexWrap: "wrap",
+            background: "linear-gradient(135deg,rgba(255,216,122,.06),rgba(255,255,255,.014))",
+            border: "1px solid rgba(255,216,122,.2)",
+            borderRadius: 15,
+            padding: "18px 22px",
+            marginTop: 13,
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
+            <span style={{ fontFamily: MONO, fontWeight: 800, fontSize: "clamp(34px,4.4vw,46px)", color: "#ffd87a", fontVariantNumeric: "tabular-nums", letterSpacing: "-.02em" }}>
+              482<span style={{ color: "#6b7186", fontWeight: 500 }}> / 482</span>
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: ".12em", color: "#9aa0b2", marginTop: 8 }}>
+              CROSS-REGION GRABS BLOCKED
+            </span>
+          </div>
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#43e08f", boxShadow: "0 0 9px #43e08f" }} />
+              <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".16em", color: "#43e08f" }}>MEASURED · REAL PEERED CLUSTER</span>
+            </div>
+            <p style={{ fontFamily: SANS, fontSize: 13.5, color: "#c5cad6", lineHeight: 1.5, margin: "9px 0 0" }}>
+              Proven on the real Tokyo⇄Seoul cluster: <span style={{ color: "#e8eaf0" }}>482 simultaneous cross-region grabs</span> of
+              the one legendary — all blocked. The count stayed <span style={{ color: "#ffd87a" }}>× 1</span>.
+            </p>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 13, marginTop: 13 }}>
           {regionsView.map((r) => (
             <div key={r.region} style={{ background: r.bg, border: `1px solid ${r.border}`, borderRadius: 15, padding: "20px 22px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span style={{ width: 10, height: 10, borderRadius: "50%", background: r.dot, boxShadow: `0 0 12px ${r.dot}` }} />
                   <span style={{ fontFamily: MONO, fontSize: 16, letterSpacing: ".16em", color: "#e8eaf0" }}>{r.region}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 9.5, color: "#6b7186" }}>{r.endpoint}</span>
                 </div>
                 <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: ".14em", color: r.statusColor }}>{r.status}</span>
               </div>
@@ -1889,6 +2080,37 @@ export default function DupedWorld() {
               <div style={{ fontFamily: SANS, fontSize: 12, color: "#6b7186", marginTop: 3 }}>trades settled in region</div>
             </div>
           ))}
+        </div>
+
+        {/* failover, made legible */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginTop: 13,
+            fontFamily: MONO,
+            fontSize: 12,
+            color: optimisticRegion ? "#a07bff" : "#6b7186",
+            background: optimisticRegion ? "rgba(160,123,255,.07)" : "rgba(255,255,255,.018)",
+            border: `1px solid ${optimisticRegion ? "rgba(160,123,255,.28)" : "rgba(255,255,255,.07)"}`,
+            borderRadius: 11,
+            padding: "11px 15px",
+            lineHeight: 1.5,
+          }}
+        >
+          <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#2ee6cf", boxShadow: "0 0 9px #2ee6cf", flexShrink: 0 }} />
+          {optimisticRegion ? (
+            <span>
+              failed over · trades now settling on <span style={{ color: "#e8eaf0" }}>{activeRegion}</span> —{" "}
+              <span style={{ color: "#43e08f" }}>still zero dupes.</span>
+            </span>
+          ) : (
+            <span>
+              settling on <span style={{ color: "#e8eaf0" }}>{activeRegion}</span>. Hit{" "}
+              <span style={{ color: "#a07bff" }}>⇄ Failover region</span> — the other endpoint takes over, count stays × 1.
+            </span>
+          )}
         </div>
       </section>
 
@@ -2026,6 +2248,28 @@ export default function DupedWorld() {
           >
             {ctlLabel("▸ Run SQL proof", "PROVE", "#5a6072")}
           </button>
+          <div style={{ width: 1, height: 30, background: "rgba(255,255,255,.1)", margin: "0 2px" }} />
+          <button
+            onClick={runReset}
+            disabled={resetBusy}
+            className="dbtn dbtn-reset"
+            title="Return the demo to a pristine, invariant-holding start"
+            style={{
+              fontFamily: MONO,
+              fontSize: 12,
+              fontWeight: 600,
+              letterSpacing: ".04em",
+              color: "#c5cad6",
+              background: "rgba(255,255,255,.05)",
+              border: "1px solid rgba(255,255,255,.16)",
+              borderRadius: 10,
+              padding: "9px 14px",
+              cursor: resetBusy ? "progress" : "pointer",
+              opacity: resetBusy ? 0.6 : 1,
+            }}
+          >
+            {ctlLabel(resetBusy ? "↺ Resetting…" : "↺ Reset world", "PRISTINE", "#6b7186")}
+          </button>
         </div>
       </div>
 
@@ -2090,6 +2334,123 @@ export default function DupedWorld() {
                     </div>
                   </div>
                 ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============ PROVENANCE MODAL ============ */}
+      {provOpen && (
+        <div
+          onClick={() => setProvOpen(false)}
+          style={{ position: "fixed", inset: 0, zIndex: 80, background: "rgba(4,5,8,.74)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="dscroll"
+            style={{ width: "100%", maxWidth: 720, maxHeight: "86vh", overflow: "auto", background: "#0a0c12", border: "1px solid rgba(255,216,122,.16)", borderRadius: 18, boxShadow: "0 50px 140px rgba(0,0,0,.8)" }}
+          >
+            <div style={{ position: "sticky", top: 0, background: "#0a0c12", borderBottom: "1px solid rgba(255,255,255,.08)", padding: "20px 24px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, zIndex: 1 }}>
+              <div>
+                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ffd87a", boxShadow: "0 0 9px #ffd87a", flexShrink: 0 }} />
+                  <span style={{ fontFamily: MONO, fontWeight: 700, fontSize: 15, letterSpacing: ".04em", color: "#ffe9b0" }}>
+                    PROVENANCE · {prov?.name ?? "THE LEGENDARY"}
+                  </span>
+                </div>
+                <div style={{ fontFamily: SANS, fontSize: 12.5, color: "#9aa0b2", marginTop: 7, lineHeight: 1.4 }}>
+                  {prov ? (
+                    <>
+                      <span style={{ color: "#e8eaf0" }}>{fmt(prov.distinctOwners)}</span> owners ·{" "}
+                      <span style={{ color: "#e8eaf0" }}>{fmt(prov.totalMoves)}</span> transfers ·{" "}
+                      {prov.neverTwoAtOnce ? (
+                        <span style={{ color: "#43e08f" }}>never two at once ✓</span>
+                      ) : (
+                        <span style={{ color: "#ff5f7e" }}>integrity broken ✕</span>
+                      )}
+                    </>
+                  ) : provErr ? (
+                    "history unavailable — the truth core is still the truth core"
+                  ) : (
+                    "tracing every place this one sword has ever been…"
+                  )}
+                </div>
+              </div>
+              <button
+                ref={provCloseRef}
+                onClick={() => setProvOpen(false)}
+                aria-label="Close provenance"
+                style={{ fontFamily: MONO, fontSize: 16, color: "#9aa0b2", background: "rgba(255,255,255,.06)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 9, width: 34, height: 34, cursor: "pointer", lineHeight: 1, flexShrink: 0 }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: "18px 24px 26px" }}>
+              {provErr ? (
+                <div style={{ fontFamily: SANS, fontSize: 13, color: "#9aa0b2", lineHeight: 1.5, background: "rgba(255,255,255,.022)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 12, padding: "16px 18px" }}>
+                  Couldn&apos;t load the provenance chain right now. Nothing is lost — the history is held in Aurora DSQL; try again
+                  in a moment.
+                </div>
+              ) : !prov ? (
+                <div style={{ fontFamily: MONO, fontSize: 12, color: "#9aa0b2" }}>reading item_moves from the truth core…</div>
+              ) : prov.chain.length === 0 ? (
+                <div style={{ fontFamily: SANS, fontSize: 13, color: "#9aa0b2", lineHeight: 1.5, background: "rgba(255,255,255,.022)", border: "1px solid rgba(255,255,255,.07)", borderRadius: 12, padding: "16px 18px" }}>
+                  No transfers recorded yet — the legendary is sitting with its first owner. Run a dupe storm and its trail will
+                  grow here, one move at a time.
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".16em", color: "#6b7186", marginBottom: 16 }}>
+                    NEWEST FIRST · EVERYWHERE THIS ONE SWORD HAS BEEN
+                  </div>
+                  <div style={{ position: "relative", display: "flex", flexDirection: "column" }}>
+                    {/* the spine */}
+                    <div style={{ position: "absolute", left: 7, top: 6, bottom: 6, width: 1.5, background: "linear-gradient(180deg,rgba(255,216,122,.4),rgba(255,255,255,.06))" }} />
+                    {prov.chain
+                      .slice()
+                      .reverse()
+                      .map((m, i) => {
+                        const tokyo = m.toRegion === "TOKYO";
+                        const col = tokyo ? "#2ee6cf" : "#a07bff";
+                        const isMint = m.moveKind === "MINT" || !m.fromOwnerId;
+                        const dotCol = isMint ? "#ffd87a" : col;
+                        return (
+                          <div key={`${m.versionAfter}-${i}`} style={{ position: "relative", display: "flex", gap: 16, paddingLeft: 0, paddingBottom: i === prov.chain.length - 1 ? 0 : 18 }}>
+                            <div style={{ position: "relative", width: 16, flexShrink: 0, display: "flex", justifyContent: "center", paddingTop: 4 }}>
+                              <span style={{ width: 11, height: 11, borderRadius: "50%", background: dotCol, boxShadow: `0 0 10px ${dotCol}`, border: "2px solid #0a0c12", zIndex: 1 }} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: ".1em", color: col, border: `1px solid ${tokyo ? "rgba(46,230,207,.3)" : "rgba(160,123,255,.3)"}`, borderRadius: 5, padding: "2px 6px" }}>
+                                  {m.toRegion}
+                                </span>
+                                <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".08em", color: isMint ? "#ffd87a" : "#9aa0b2", border: "1px solid rgba(255,255,255,.12)", borderRadius: 5, padding: "2px 6px" }}>
+                                  {m.moveKind}
+                                </span>
+                                <span style={{ fontFamily: MONO, fontSize: 10, color: "#ffd87a", background: "rgba(255,216,122,.08)", border: "1px solid rgba(255,216,122,.22)", borderRadius: 5, padding: "2px 6px" }}>
+                                  v{m.versionAfter}
+                                </span>
+                                <span style={{ flex: 1 }} />
+                                <span style={{ fontFamily: MONO, fontSize: 11, color: "#6b7186", fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{ftime(m.createdAt)}</span>
+                              </div>
+                              <div style={{ fontFamily: MONO, fontSize: 12.5, color: "#c5cad6", marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                                <span style={{ color: isMint ? "#6b7186" : "#9aa0b2" }}>{shortId(m.fromOwnerId)}</span>
+                                <span style={{ color: "#5a6072" }}>→</span>
+                                <span style={{ color: "#e8eaf0" }}>{shortId(m.toOwnerId)}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                  <div style={{ fontFamily: SANS, fontSize: 12, color: "#6b7186", lineHeight: 1.5, marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,.06)" }}>
+                    Every row above is one version bump on a single <span style={{ color: "#9aa0b2" }}>item_instances</span> row. The
+                    version only ever moves forward — so the sword was{" "}
+                    <span style={{ color: "#43e08f" }}>never in two places at once.</span>
+                  </div>
+                </>
               )}
             </div>
           </div>

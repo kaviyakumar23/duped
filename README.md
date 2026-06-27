@@ -1,5 +1,7 @@
 # Duped — a globally consistent economy kernel for online games
 
+[![CI](https://github.com/kaviyakumar23/duped/actions/workflows/ci.yml/badge.svg)](https://github.com/kaviyakumar23/duped/actions/workflows/ci.yml)
+
 > **Duped makes item & gold duplication unrepresentable in a game's authoritative economy state** — exclusive ownership rows with version-guarded transfers for unique items, conserved balances and a balanced ledger for gold — **atomic and strongly consistent across regions on Aurora DSQL**, with **DynamoDB** powering the live world read model. Deployed on **Vercel**.
 
 Built for **H0 — Hack the Zero Stack** · Track 3 (Million-Scale Global App, gaming).
