@@ -5,6 +5,7 @@ import { DEMO, poolKeyToRegion } from "../demo/config";
 import type { Region } from "../types";
 import { ddbKeys } from "./keys";
 import { runInvariants, type InvariantReport } from "./invariants";
+import { projectOnce } from "../outbox/projector";
 
 /**
  * The world read model. `getWorldSnapshot` is what the live arena + economy console render every
@@ -123,14 +124,22 @@ async function readFeed(realmId: string, limit = 14): Promise<FeedEvent[]> {
 export async function getWorldSnapshot(realmId: string = DEMO.realmId): Promise<WorldSnapshot> {
   const pool = getPool("primary");
 
-  const [invariants, legRes, byRegionRes, goldRes, itemsRes, feed] = await Promise.all([
+  // Project-on-read: opportunistically drain a batch of the transactional outbox into the DynamoDB
+  // world feed on each snapshot, so the live feed self-populates while anyone is watching — no cron,
+  // no background worker, works on any Vercel plan. Best-effort: a hiccup here must never blank the
+  // world, and it runs concurrently with the DSQL reads below so it adds ~no latency. The next tick
+  // (SSE ~1.5s or polling ~2s) drains the next batch.
+  const drain = projectOnce(150).catch(() => 0);
+
+  const [invariants, legRes, byRegionRes, goldRes, itemsRes] = await Promise.all([
     runInvariants(pool, { realmId }),
     pool.query(SQL_LEGENDARY, [DEMO.legendaryInstanceId]),
     pool.query(SQL_BY_REGION, [realmId]),
     pool.query(SQL_GOLD_MOVED, [realmId]),
     pool.query(SQL_ITEMS_MOVED, [realmId]),
-    readFeed(realmId),
   ]);
+  await drain; // ensure just-projected settlements are visible in the feed read below
+  const feed = await readFeed(realmId);
 
   const leg = legRes.rows[0] ?? {};
   const ownerId = String(leg.owner_id ?? DEMO.founderPlayerId);
