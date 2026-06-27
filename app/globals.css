@@ -3,47 +3,14 @@
 @tailwind utilities;
 
 /* ============================================================================
-   DUPED — design system
-   A globally consistent economy kernel for online games. The page is "the live
-   world": a deep, cinematic, aurora-lit void where ONE legendary blade holds at
-   exactly 1 while thousands attack. Palette = near-black abyss + aurora teal /
-   violet, with a legendary GOLD accent reserved for the one true item.
+   DUPED — the live world. Ported faithfully from the approved claude.ai design:
+   a deep, cinematic aurora void where ONE legendary blade holds at exactly 1
+   while thousands of bots attack across two regions. Fonts are wired via
+   next/font (Sora body, JetBrains Mono display) exposed as --font-sora /
+   --font-mono; the page's inline styles reference those vars.
    ============================================================================ */
 :root {
   color-scheme: dark;
-
-  /* surfaces */
-  --void: #04050b;
-  --abyss: #06070f;
-  --panel: #0a0d1a;
-  --panel-2: #0c1020;
-  --panel-3: #0e1326;
-  --hairline: rgba(126, 158, 222, 0.12);
-  --hairline-2: rgba(126, 158, 222, 0.07);
-
-  /* text */
-  --text-hi: #eaf1ff;
-  --text-mid: #8d9bc2;
-  --text-dim: #545f80;
-  --text-faint: #38415c;
-
-  /* aurora + accents */
-  --teal: #2ff0cf;
-  --teal-deep: #14c8b6;
-  --violet: #9d80ff;
-  --violet-deep: #7a5cf0;
-  --gold: #ffcf63;
-  --gold-hot: #ffe7a8;
-  --gold-deep: #e9a32c;
-  --rose: #ff5d7c;
-  --rose-deep: #e23a63;
-  --green: #46e7a8;
-
-  --sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
-
-  --glow-teal: 0 0 22px rgba(47, 240, 207, 0.45);
-  --glow-gold: 0 0 26px rgba(255, 207, 99, 0.5);
 }
 
 * {
@@ -53,318 +20,104 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--void);
-  color: var(--text-hi);
-  font-family: var(--sans);
+}
+body {
+  background:
+    radial-gradient(1200px 720px at 16% -10%, rgba(46, 230, 207, 0.1), transparent 58%),
+    radial-gradient(1100px 820px at 94% 8%, rgba(160, 123, 255, 0.11), transparent 54%),
+    radial-gradient(900px 760px at 50% 122%, rgba(46, 230, 207, 0.05), transparent 60%),
+    #06070b;
+  color: #e8eaf0;
+  font-family: var(--font-sora), "Sora", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
 }
 ::selection {
-  background: rgba(47, 240, 207, 0.28);
+  background: rgba(255, 216, 122, 0.28);
   color: #fff;
 }
-.mono {
-  font-family: var(--mono);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-.tnum {
-  font-variant-numeric: tabular-nums;
-}
 
-/* ---- The world shell: layered aurora + parallax starfield over the abyss ---- */
-.duped-shell {
-  position: relative;
-  min-height: 100vh;
-  overflow-x: hidden;
-  isolation: isolate;
-  background:
-    radial-gradient(85% 55% at 16% -8%, rgba(47, 240, 207, 0.1), transparent 60%),
-    radial-gradient(75% 50% at 88% -6%, rgba(157, 128, 255, 0.11), transparent 60%),
-    radial-gradient(120% 80% at 50% 118%, rgba(47, 240, 207, 0.05), transparent 55%),
-    var(--abyss);
-}
-
-/* Drifting aurora ribbons, fixed behind everything. */
-.duped-aurora {
-  position: fixed;
-  inset: -25vmax;
-  z-index: -2;
-  pointer-events: none;
-  background:
-    radial-gradient(38vmax 26vmax at 22% 18%, rgba(47, 240, 207, 0.12), transparent 60%),
-    radial-gradient(34vmax 24vmax at 78% 26%, rgba(157, 128, 255, 0.13), transparent 62%),
-    radial-gradient(30vmax 22vmax at 60% 80%, rgba(122, 92, 240, 0.08), transparent 60%);
-  filter: blur(8px) saturate(1.1);
-  animation: duped-aurora-drift 26s ease-in-out infinite alternate;
-}
-
-/* Parallax starfield — three layered, repeating dot fields for depth. */
-.duped-stars {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  opacity: 0.9;
-  background-image:
-    radial-gradient(1.6px 1.6px at 40px 60px, rgba(255, 255, 255, 0.85), transparent 60%),
-    radial-gradient(1.3px 1.3px at 180px 140px, rgba(190, 224, 255, 0.7), transparent 60%),
-    radial-gradient(1px 1px at 320px 240px, rgba(255, 246, 214, 0.6), transparent 60%),
-    radial-gradient(1.1px 1.1px at 90px 300px, rgba(176, 255, 240, 0.55), transparent 60%),
-    radial-gradient(1px 1px at 260px 40px, rgba(255, 255, 255, 0.5), transparent 60%);
-  background-size: 380px 380px, 300px 300px, 460px 460px, 340px 340px, 220px 220px;
-  animation: duped-twinkle 7s ease-in-out infinite;
-}
-
-/* Fine grain so flat panels read as cut glass / instrument hardware. */
-.duped-grain::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 90;
-  mix-blend-mode: soft-light;
-  opacity: 0.045;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-}
-
-/* A reusable "instrument panel": cut-glass surface with a hairline + top sheen. */
-.duped-panel {
-  position: relative;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 22%),
-    linear-gradient(180deg, var(--panel-2), var(--panel));
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  box-shadow:
-    0 1px 0 0 rgba(255, 255, 255, 0.03) inset,
-    0 30px 80px -50px rgba(0, 0, 0, 0.9);
-}
-
-.kicker {
-  font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.28em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-/* Corner ticks for the "engineered" instrument look. */
-.duped-corners > span {
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  pointer-events: none;
-  opacity: 0.6;
-}
-
-/* ---------------------------------- motion --------------------------------- */
-@keyframes duped-aurora-drift {
-  0% {
-    transform: translate3d(-2%, -1%, 0) rotate(0deg) scale(1);
-  }
-  50% {
-    transform: translate3d(3%, 2%, 0) rotate(4deg) scale(1.08);
-  }
-  100% {
-    transform: translate3d(-1%, 3%, 0) rotate(-3deg) scale(1.04);
-  }
-}
-@keyframes duped-twinkle {
-  0%,
-  100% {
-    opacity: 0.55;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-@keyframes duped-live {
+@keyframes dblink {
   0%,
   100% {
     opacity: 1;
-    transform: scale(1);
   }
   50% {
-    opacity: 0.4;
-    transform: scale(0.7);
+    opacity: 0.28;
   }
 }
-@keyframes duped-bob {
-  0%,
-  100% {
-    transform: translateY(-2.5px) rotate(-19deg);
-  }
-  50% {
-    transform: translateY(2.5px) rotate(-21deg);
-  }
-}
-@keyframes duped-count-glow {
-  0%,
-  100% {
-    text-shadow: 0 0 28px rgba(255, 207, 99, 0.45), 0 0 70px rgba(255, 207, 99, 0.18);
-  }
-  50% {
-    text-shadow: 0 0 40px rgba(255, 207, 99, 0.62), 0 0 110px rgba(255, 207, 99, 0.28);
-  }
-}
-@keyframes duped-ping {
-  0% {
-    transform: scale(0.7);
-    opacity: 0.55;
-  }
-  80%,
-  100% {
-    transform: scale(2.1);
-    opacity: 0;
-  }
-}
-@keyframes duped-fade-up {
+@keyframes dtoast {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateX(16px) scale(0.98);
   }
   to {
     opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dfloat {
+  0%,
+  100% {
     transform: translateY(0);
   }
-}
-@keyframes duped-feed-in {
-  from {
-    opacity: 0;
-    transform: translateX(-10px);
-    background: rgba(47, 240, 207, 0.1);
+  50% {
+    transform: translateY(-5px);
   }
+}
+@keyframes dsweep {
   to {
-    opacity: 1;
-    transform: translateX(0);
-    background: transparent;
-  }
-}
-@keyframes duped-toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(18px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-@keyframes duped-modal-in {
-  from {
-    opacity: 0;
-    transform: translateY(22px) scale(0.97);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-@keyframes duped-flash {
-  0% {
-    opacity: 0;
-    transform: translateY(8px) scale(0.96);
-  }
-  12% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-  82% {
-    opacity: 1;
-  }
-  100% {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-}
-@keyframes duped-dash {
-  to {
-    stroke-dashoffset: -1000;
-  }
-}
-@keyframes duped-shimmer {
-  0% {
-    background-position: -420px 0;
-  }
-  100% {
-    background-position: 420px 0;
-  }
-}
-@keyframes duped-scan {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(2200%);
-  }
-}
-@keyframes duped-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes duped-shake {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0);
-  }
-  20% {
-    transform: translate3d(-1.5px, 1px, 0);
-  }
-  40% {
-    transform: translate3d(2px, -1px, 0);
-  }
-  60% {
-    transform: translate3d(-2px, -1px, 0);
-  }
-  80% {
-    transform: translate3d(1.5px, 1px, 0);
+    background-position: 200% 0;
   }
 }
 
-.anim-fade-up {
-  animation: duped-fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+/* Hover affordances for the inline-styled control buttons (inline bg is the
+   resting state; these classes lift it on hover via !important). */
+.dbtn {
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
-.live-dot {
-  animation: duped-live 1.5s ease-in-out infinite;
+.dbtn-storm:hover {
+  background: rgba(255, 95, 126, 0.28) !important;
+}
+.dbtn-gold:hover {
+  background: rgba(255, 216, 122, 0.24) !important;
+}
+.dbtn-market:hover {
+  background: rgba(46, 230, 207, 0.24) !important;
+}
+.dbtn-failover:hover {
+  background: rgba(160, 123, 255, 0.26) !important;
+}
+.dbtn-failover2:hover {
+  background: rgba(160, 123, 255, 0.22) !important;
+}
+.dbtn-proof:hover {
+  background: #fff !important;
+}
+.dbtn:disabled {
+  opacity: 0.55;
+  cursor: progress;
 }
 
-/* Main world layout: console+region (wide) beside the settlement feed; stacks on narrow. */
-.world-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .world-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Scrollbars inside consoles. */
-.duped-scroll {
+.dscroll {
   scrollbar-width: thin;
   scrollbar-color: rgba(126, 158, 222, 0.25) transparent;
 }
-.duped-scroll::-webkit-scrollbar {
+.dscroll::-webkit-scrollbar {
   width: 7px;
   height: 7px;
 }
-.duped-scroll::-webkit-scrollbar-thumb {
+.dscroll::-webkit-scrollbar-thumb {
   background: rgba(126, 158, 222, 0.2);
   border-radius: 99px;
 }
-.duped-scroll::-webkit-scrollbar-track {
+.dscroll::-webkit-scrollbar-track {
   background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+  * {
+    animation: none !important;
+    transition: none !important;
   }
 }
