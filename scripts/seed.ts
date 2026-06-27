@@ -29,6 +29,7 @@ import { getPool } from "../lib/db/region-router.js";
 
 // Every Duped table (with its PK), wiped before reseeding. No FKs in DSQL, so order is arbitrary.
 const TABLES: ReadonlyArray<readonly [string, string]> = [
+  ["legacy_inventory", "entry_id"],
   ["world_outbox", "event_id"],
   ["trade_idempotency", "registry_id"],
   ["economy_ledger_entries", "entry_id"],
@@ -165,6 +166,14 @@ async function seedTxn(pool: PgPool): Promise<void> {
           [randomUUID(), DEMO.realmId, DEMO.treasuryPlayerId, DEMO.currency, treasuryBalances[i], i],
         );
       }
+
+      // 6b. The BROKEN economy's starting state: one correct copy of the legendary (founder owns it).
+      //     The contrast demo races naive transfers against this and watches it multiply. (Audit-only;
+      //     not part of the authoritative state.)
+      await pool.query(
+        `INSERT INTO legacy_inventory (entry_id, realm_id, instance_id, owner_id) VALUES ($1,$2,$3,$4)`,
+        [randomUUID(), DEMO.realmId, DEMO.legendaryInstanceId, DEMO.founderPlayerId],
+      );
 
       // 7. Light fungible potion stack for the founder (model completeness: fungible vs unique).
       for (let i = 0; i < potionQtys.length; i++) {

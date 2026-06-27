@@ -160,7 +160,23 @@ CREATE TABLE IF NOT EXISTS world_outbox (
   published_at   TIMESTAMPTZ
 );
 
+-- ───────────────────────────────────────────────────────────────────────────────────────────────
+-- THE DELIBERATELY-BROKEN model — for the contrast demo ONLY (NOT part of the authoritative state).
+-- A naive game tracks ownership as append/remove inventory rows with NO uniqueness and NO version
+-- guard. A trade race then reads "A owns X", and two concurrent trades both INSERT a new owner
+-- before the old row is removed → TWO owners of one item → a DUPE. count(*) here can exceed 1 — that
+-- is the 25-year-old bug, reproduced on camera. Duped's item_instances makes that unrepresentable.
+-- ───────────────────────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS legacy_inventory (
+  entry_id    UUID PRIMARY KEY,
+  realm_id    UUID NOT NULL,
+  instance_id UUID NOT NULL,        -- NO unique constraint: many rows per instance can exist (the bug)
+  owner_id    TEXT NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Async indexes (DSQL builds indexes asynchronously). The migrate runner tolerates "already exists".
+CREATE INDEX ASYNC ix_legacy_inventory_instance ON legacy_inventory (instance_id);
 -- The two UNIQUE indexes on idempotency are the structural exactly-once guard.
 CREATE UNIQUE INDEX ASYNC uq_item_templates_realm_code ON item_templates (realm_id, code);
 CREATE INDEX ASYNC ix_item_instances_template ON item_instances (template_id);

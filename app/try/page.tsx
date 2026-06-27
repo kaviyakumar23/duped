@@ -77,6 +77,21 @@ interface ToastItem {
   accent: string;
 }
 
+/* the naive (broken) economy — mirrors lib/swarm/legacy.ts response shapes (kept local so no
+   server code is pulled into the client bundle) */
+interface LegacyState {
+  copies: number;
+  owners: string[];
+  duped: boolean;
+}
+interface LegacyStormReport {
+  attempts: number;
+  copiesBefore: number;
+  copiesAfter: number;
+  duped: boolean;
+  durationMs: number;
+}
+
 export default function DupedWorld() {
   const { snapshot, conn } = useWorld();
   const world = snapshot ?? FALLBACK_SNAPSHOT;
@@ -106,6 +121,15 @@ export default function DupedWorld() {
   const [proofRan, setProofRan] = useState(false);
   const [showInvDetails, setShowInvDetails] = useState(false);
   const [showScaleDetails, setShowScaleDetails] = useState(false);
+
+  // the contrast — naive (broken) economy vs Duped, same attack
+  const [legacy, setLegacy] = useState<LegacyState | null>(null);
+  const [legacyErr, setLegacyErr] = useState(false);
+  const [legacyBusy, setLegacyBusy] = useState(false);
+  const [legacyStorm, setLegacyStorm] = useState<LegacyStormReport | null>(null);
+  const [dupeShake, setDupeShake] = useState(0);
+  const [rightBusy, setRightBusy] = useState(false);
+  const [rightResult, setRightResult] = useState<StormReport | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<Sim>({
@@ -598,6 +622,93 @@ export default function DupedWorld() {
     }
   }, [busy.failover, pushToast]);
 
+  /* ----------------------------- the contrast -------------------------------- */
+  const loadLegacy = useCallback(async () => {
+    try {
+      const res = await fetch("/api/world/legacy", { cache: "no-store" });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as LegacyState;
+      setLegacy(data);
+      setLegacyErr(false);
+    } catch {
+      setLegacyErr(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadLegacy();
+  }, [loadLegacy]);
+
+  const runLegacyRace = useCallback(async () => {
+    if (legacyBusy) return;
+    setLegacyBusy(true);
+    try {
+      const res = await fetch("/api/world/legacy-storm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const r = (await res.json()) as LegacyStormReport;
+      setLegacyStorm(r);
+      await loadLegacy();
+      if (r.copiesAfter > 1) {
+        setDupeShake((k) => k + 1);
+        pushToast(
+          "NAIVE DB · DUPED",
+          `the one legendary multiplied into ${r.copiesAfter} inventories — a real dupe, in the database`,
+          "#ff5f7e",
+        );
+      }
+    } catch {
+      pushToast("RACE FAILED", "legacy endpoint unavailable · state unchanged", "#ff5f7e");
+    } finally {
+      setLegacyBusy(false);
+    }
+  }, [legacyBusy, loadLegacy, pushToast]);
+
+  const resetLegacyCard = useCallback(async () => {
+    try {
+      const res = await fetch("/api/world/legacy-reset", { method: "POST" });
+      if (!res.ok) throw new Error(String(res.status));
+      const data = (await res.json()) as LegacyState;
+      setLegacy(data);
+      setLegacyErr(false);
+      setLegacyStorm(null);
+    } catch {
+      pushToast("RESET FAILED", "legacy endpoint unavailable · state unchanged", "#ff5f7e");
+    }
+  }, [pushToast]);
+
+  const runRightRace = useCallback(async () => {
+    if (rightBusy) return;
+    setRightBusy(true);
+    setArenaStorm(true);
+    simRef.current.stormUntil = performance.now() + 6800;
+    try {
+      const res = await fetch("/api/world/storm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ attempts: 600, concurrency: 80, waves: 3 }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const r = (await res.json()) as StormReport;
+      setRightResult(r);
+      setLastDupe(r);
+      setOccRetriesSum((s) => s + (r.retriesTotal || 0));
+      pushToast(
+        "DUPED · HELD",
+        `${fmt(r.dupeBlocked)} attempts blocked · still exactly one (× ${r.legendaryCountAfter})`,
+        "#ffd87a",
+      );
+    } catch {
+      pushToast("RACE FAILED", "storm endpoint unavailable · last-good values held", "#ffd87a");
+    } finally {
+      setRightBusy(false);
+      setTimeout(() => setArenaStorm(false), 6800);
+    }
+  }, [rightBusy, pushToast]);
+
   /* -------------------------------- view model ------------------------------- */
   const cm = connMeta(conn);
   const leg = world.legendary;
@@ -632,6 +743,12 @@ export default function DupedWorld() {
   const countColor = legCount === 1 ? "#ffd87a" : "#ff5f7e";
   const countGlow = legCount === 1 ? "rgba(255,216,122,.45)" : "rgba(255,95,126,.5)";
   const chipLeft = leg.region === "TOKYO" ? "20%" : "80%";
+
+  // contrast view model
+  const legacyCopiesText = legacyErr || legacy === null ? "—" : String(legacy.copies);
+  const legacyDuped = legacy?.duped ?? false;
+  const legacyOwners = legacy?.owners ?? [];
+  const rightBlocked = rightResult ? fmt(rightResult.dupeBlocked) : null;
 
   const liveTps = marketReport ? String(Math.round(marketReport.settlesPerSec)) : "—";
   const liveConc = marketReport ? String(marketReport.concurrency) : "—";
@@ -723,6 +840,9 @@ export default function DupedWorld() {
   /* ------------------------------ guided tour ------------------------------- */
   const goldConserved = goldReport ? goldReport.goldSupplyBeforeMinor === goldReport.goldSupplyAfterMinor : false;
   const stepResult: (string | null)[] = [
+    legacyStorm
+      ? `✓ the naive DB duplicated the legendary into ${legacyStorm.copiesAfter} inventories — the SAME race leaves Duped at × ${legCount}.`
+      : null,
     null,
     lastDupe
       ? `✓ ${fmt(lastDupe.dupeBlocked)} dupe attempts blocked · legendaryCountAfter = ${lastDupe.legendaryCountAfter} — it never duplicated.`
@@ -745,6 +865,12 @@ export default function DupedWorld() {
     accent: string;
   }
   const tourSteps: { title: string; body: string; action: TourAction | null; ctl: string | null }[] = [
+    {
+      title: "See what a dupe is",
+      body: "Start with the problem. In the contrast above, the LEFT card is a naive game database with no version guard. Run the trade race and watch the one legendary multiply into ~20 inventories — a real dupe, in a real table. The RIGHT card takes the SAME attack and stays × 1.",
+      action: { label: "▸ Run the trade race", run: runLegacyRace, busy: legacyBusy, accent: "#ff5f7e" },
+      ctl: null,
+    },
     {
       title: "Meet Aetheria",
       body: "There is exactly ONE legendary sword in this entire economy. Watch the big counter in the arena below — it reads × 1. Everything on this page is live against Aurora DSQL, not a mockup.",
@@ -804,6 +930,31 @@ export default function DupedWorld() {
           50%     { box-shadow: 0 0 0 1px rgba(46,230,207,.9), 0 0 18px rgba(46,230,207,.6); }
         }
         .dtour-next { animation: dtournext 1.5s ease-in-out infinite; }
+        .dcontrast-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+        .dcontrast-vs {
+          position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+          z-index: 3; width: 46px; height: 46px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: rgba(10,12,18,.92); border: 1px solid rgba(255,255,255,.14);
+          font-family: ${MONO}; font-size: 12px; font-weight: 700; letter-spacing: .12em; color: #9aa0b2;
+          box-shadow: 0 8px 30px rgba(0,0,0,.6);
+        }
+        @media (max-width: 860px) {
+          .dcontrast-grid { grid-template-columns: 1fr; }
+          .dcontrast-vs { display: none; }
+        }
+        @keyframes ddupeshake {
+          10%,90% { transform: translateX(-2px); }
+          20%,80% { transform: translateX(3px); }
+          30%,50%,70% { transform: translateX(-6px); }
+          40%,60% { transform: translateX(6px); }
+        }
+        .dduped-shake { animation: ddupeshake .62s cubic-bezier(.36,.07,.19,.97); }
+        @keyframes ddupeflash {
+          0%,100% { text-shadow: 0 0 38px rgba(255,95,126,.5); }
+          50%     { text-shadow: 0 0 74px rgba(255,95,126,.9); }
+        }
+        .dduped-glow { animation: ddupeflash 1.5s ease-in-out infinite; }
       `}</style>
       {/* ============ 01 HERO ============ */}
       <header style={{ maxWidth: 1180, margin: "0 auto", padding: "38px 28px 8px" }}>
@@ -887,6 +1038,308 @@ export default function DupedWorld() {
           </div>
         </div>
       </header>
+
+      {/* ============ THE CONTRAST · SAME ATTACK, TWO DATABASES ============ */}
+      <section style={{ maxWidth: 1180, margin: "34px auto 0", padding: "0 28px" }}>
+        <div style={{ textAlign: "center", maxWidth: 720, margin: "0 auto 22px" }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: ".3em", color: "#ff8aa0" }}>
+            THE CONTRAST
+          </span>
+          <h2
+            style={{
+              fontFamily: SANS,
+              fontWeight: 800,
+              fontSize: "clamp(26px,4vw,38px)",
+              letterSpacing: "-.02em",
+              color: "#e8eaf0",
+              margin: "12px 0 0",
+              lineHeight: 1.05,
+            }}
+          >
+            Same attack. <span style={{ color: "#ff5f7e" }}>Two</span> databases.
+          </h2>
+          <p style={{ fontFamily: SANS, fontSize: 15, color: "#9aa0b2", margin: "10px 0 0", lineHeight: 1.5 }}>
+            Watch a dupe happen — then watch it become impossible. Both cards are live against Aurora DSQL.
+          </p>
+        </div>
+
+        <div style={{ position: "relative" }}>
+          <div className="dcontrast-grid">
+            {/* ---------- LEFT · NAIVE ECONOMY (broken) ---------- */}
+            <div
+              style={{
+                position: "relative",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+                background: legacyDuped
+                  ? "linear-gradient(150deg, rgba(255,95,126,.12), rgba(255,255,255,.014))"
+                  : "linear-gradient(150deg, rgba(255,95,126,.045), rgba(255,255,255,.014))",
+                border: `1px solid ${legacyDuped ? "rgba(255,95,126,.5)" : "rgba(255,95,126,.3)"}`,
+                borderRadius: 15,
+                padding: "22px 24px 24px",
+                transition: "border .4s ease, background .4s ease",
+                boxShadow: legacyDuped ? "0 30px 90px -44px rgba(255,95,126,.6)" : "none",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ff5f7e", boxShadow: "0 0 9px #ff5f7e", flexShrink: 0 }} />
+                <span style={{ fontFamily: MONO, fontSize: 11.5, letterSpacing: ".14em", color: "#ff8aa0", fontWeight: 700 }}>NAIVE ECONOMY</span>
+                <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".12em", color: "#6b7186", border: "1px solid rgba(255,255,255,.1)", borderRadius: 5, padding: "2px 6px" }}>
+                  no version guard
+                </span>
+              </div>
+
+              <div
+                key={`dupeshake-${dupeShake}`}
+                className={legacyDuped ? "dduped-shake dduped-glow" : undefined}
+                style={{
+                  fontFamily: MONO,
+                  fontWeight: 800,
+                  fontSize: "clamp(60px,8.6vw,100px)",
+                  lineHeight: 0.9,
+                  letterSpacing: "-.045em",
+                  color: legacyDuped ? "#ff5f7e" : "#e8eaf0",
+                  fontVariantNumeric: "tabular-nums",
+                  marginTop: 18,
+                  transition: "color .4s ease",
+                }}
+              >
+                <span style={{ opacity: 0.4, fontWeight: 500 }}>× </span>
+                {legacyCopiesText}
+              </div>
+
+              <div
+                style={{
+                  fontFamily: legacyDuped ? MONO : SANS,
+                  fontSize: legacyDuped ? 12.5 : 13,
+                  letterSpacing: legacyDuped ? ".02em" : "0",
+                  color: legacyBusy ? "#ffd87a" : legacyDuped ? "#ff8aa0" : "#6b7186",
+                  marginTop: 14,
+                  lineHeight: 1.4,
+                  minHeight: 18,
+                }}
+              >
+                {legacyBusy
+                  ? "racing… two transfers reading the same owner"
+                  : legacyDuped
+                    ? `DUPLICATED — the legendary now exists in ${legacy?.copies} inventories`
+                    : legacyErr
+                      ? "legacy economy offline · state unavailable"
+                      : "one item · one owner — for now"}
+              </div>
+
+              {legacyDuped && legacyOwners.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".1em", color: "#6b7186", marginBottom: 7 }}>
+                    EACH OF THESE PLAYERS THINKS THEY HOLD IT
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {legacyOwners.slice(0, 5).map((o, i) => (
+                      <span
+                        key={`${o}-${i}`}
+                        style={{
+                          fontFamily: MONO,
+                          fontSize: 10.5,
+                          color: "#ffb3c1",
+                          background: "rgba(255,95,126,.1)",
+                          border: "1px solid rgba(255,95,126,.28)",
+                          borderRadius: 6,
+                          padding: "3px 8px",
+                        }}
+                      >
+                        {o.length > 14 ? o.slice(0, 14) + "…" : o}
+                      </span>
+                    ))}
+                    {legacyOwners.length > 5 && (
+                      <span style={{ fontFamily: MONO, fontSize: 10.5, color: "#9aa0b2", padding: "3px 4px" }}>
+                        +{legacy!.copies - 5} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+                <button
+                  onClick={runLegacyRace}
+                  disabled={legacyBusy}
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    letterSpacing: ".03em",
+                    color: "#06070b",
+                    background: "linear-gradient(135deg,#ff5f7e,#ff7d96)",
+                    border: "none",
+                    borderRadius: 10,
+                    padding: "10px 18px",
+                    cursor: legacyBusy ? "progress" : "pointer",
+                    opacity: legacyBusy ? 0.65 : 1,
+                    boxShadow: "0 0 22px -6px #ff5f7e",
+                  }}
+                >
+                  {legacyBusy ? "racing…" : "▸ Run the trade race"}
+                </button>
+                <button
+                  onClick={resetLegacyCard}
+                  disabled={legacyBusy}
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 11.5,
+                    letterSpacing: ".04em",
+                    color: "#9aa0b2",
+                    background: "rgba(255,255,255,.04)",
+                    border: "1px solid rgba(255,255,255,.12)",
+                    borderRadius: 10,
+                    padding: "10px 14px",
+                    cursor: legacyBusy ? "not-allowed" : "pointer",
+                  }}
+                >
+                  ↺ reset
+                </button>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 18,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  color: "#9fb6b0",
+                  background: "rgba(0,0,0,.34)",
+                  border: "1px solid rgba(255,255,255,.06)",
+                  borderRadius: 9,
+                  padding: "11px 13px",
+                  lineHeight: 1.6,
+                  wordBreak: "break-word",
+                }}
+              >
+                <span style={{ color: "#5a6072" }}>SELECT</span> count(*) <span style={{ color: "#5a6072" }}>FROM</span> legacy_inventory{" "}
+                <span style={{ color: "#5a6072" }}>WHERE</span> instance_id <span style={{ color: "#5a6072" }}>=</span> &apos;…&apos;;
+                <div style={{ marginTop: 6, color: "#6b7186" }}>
+                  → returns{" "}
+                  <span style={{ color: legacyDuped ? "#ff5f7e" : "#e8eaf0", fontWeight: 700 }}>{legacyCopiesText}</span>
+                </div>
+              </div>
+
+              <p style={{ fontFamily: SANS, fontSize: 12, color: "#6b7186", margin: "14px 0 0", lineHeight: 1.5 }}>
+                Two concurrent trades both read &quot;A owns it&quot;, both write a new owner — the old row is removed once. One
+                item, many owners. This is the 25-year-old bug.
+              </p>
+            </div>
+
+            {/* ---------- RIGHT · DUPED (version-guarded) ---------- */}
+            <div
+              style={{
+                position: "relative",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column",
+                background: "linear-gradient(150deg, rgba(255,216,122,.06), rgba(46,230,207,.03) 55%, rgba(255,255,255,.014))",
+                border: "1px solid rgba(255,216,122,.28)",
+                borderRadius: 15,
+                padding: "22px 24px 24px",
+                boxShadow: "0 30px 90px -48px rgba(255,216,122,.45)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#ffd87a", boxShadow: "0 0 9px #ffd87a", flexShrink: 0 }} />
+                <span style={{ fontFamily: MONO, fontSize: 11.5, letterSpacing: ".14em", color: "#ffd87a", fontWeight: 700 }}>DUPED</span>
+                <span style={{ fontFamily: MONO, fontSize: 9.5, letterSpacing: ".12em", color: "#6b7186", border: "1px solid rgba(255,216,122,.22)", borderRadius: 5, padding: "2px 6px" }}>
+                  version-guarded
+                </span>
+              </div>
+
+              <div
+                style={{
+                  fontFamily: MONO,
+                  fontWeight: 800,
+                  fontSize: "clamp(60px,8.6vw,100px)",
+                  lineHeight: 0.9,
+                  letterSpacing: "-.045em",
+                  color: "#ffd87a",
+                  fontVariantNumeric: "tabular-nums",
+                  marginTop: 18,
+                  textShadow: "0 0 44px rgba(255,216,122,.45)",
+                }}
+              >
+                <span style={{ opacity: 0.4, fontWeight: 500 }}>× </span>
+                {legCount}
+              </div>
+
+              <div
+                style={{
+                  fontFamily: rightBlocked ? MONO : SANS,
+                  fontSize: rightBlocked ? 12.5 : 13,
+                  color: rightBusy ? "#2ee6cf" : rightBlocked ? "#43e08f" : "#6b7186",
+                  marginTop: 14,
+                  lineHeight: 1.4,
+                  minHeight: 18,
+                }}
+              >
+                {rightBusy
+                  ? "racing… the same attack, against the version guard"
+                  : rightBlocked
+                    ? `${rightBlocked} attempts blocked · still exactly one`
+                    : "one row · one owner · one version guard"}
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+                <button
+                  onClick={runRightRace}
+                  disabled={rightBusy}
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 12.5,
+                    fontWeight: 700,
+                    letterSpacing: ".03em",
+                    color: "#06070b",
+                    background: "linear-gradient(135deg,#ffd87a,#ffe9b0)",
+                    border: "none",
+                    borderRadius: 10,
+                    padding: "10px 18px",
+                    cursor: rightBusy ? "progress" : "pointer",
+                    opacity: rightBusy ? 0.65 : 1,
+                    boxShadow: "0 0 22px -6px #ffd87a",
+                  }}
+                >
+                  {rightBusy ? "racing…" : "▸ Run the SAME race"}
+                </button>
+                <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: ".06em", color: "#6b7186" }}>
+                  exactly one wins · the rest re-read
+                </span>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 18,
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  color: "#9fd9cf",
+                  background: "rgba(0,0,0,.34)",
+                  border: "1px solid rgba(255,255,255,.06)",
+                  borderRadius: 9,
+                  padding: "11px 13px",
+                  lineHeight: 1.6,
+                  wordBreak: "break-word",
+                }}
+              >
+                <span style={{ color: "#5a6072" }}>SELECT</span> count(*) <span style={{ color: "#5a6072" }}>FROM</span> item_instances{" "}
+                <span style={{ color: "#5a6072" }}>WHERE</span> template_id <span style={{ color: "#5a6072" }}>=</span> &apos;…&apos;;
+                <div style={{ marginTop: 6, color: "#6b7186" }}>
+                  → returns <span style={{ color: "#ffd87a", fontWeight: 700 }}>{legCount}</span>
+                </div>
+              </div>
+
+              <p style={{ fontFamily: SANS, fontSize: 12, color: "#6b7186", margin: "14px 0 0", lineHeight: 1.5 }}>
+                One row, one owner, a version guard. Two transfers can&apos;t both match — exactly one wins. &quot;Owned twice&quot;
+                has no representation.
+              </p>
+            </div>
+          </div>
+          <div className="dcontrast-vs" aria-hidden>VS</div>
+        </div>
+      </section>
 
       {/* ============ GUIDED WALKTHROUGH ============ */}
       {tourOpen ? (
