@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Sora, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import SiteNav from "@/components/site/SiteNav";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -45,7 +46,10 @@ export default function RootLayout({
             backgroundSize: "140px",
           }}
         />
-        {children}
+        <div style={{ position: "relative", zIndex: 2 }}>
+          <SiteNav />
+          {children}
+        </div>
       </body>
     </html>
   );
