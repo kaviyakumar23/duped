@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next.js / build
+.next/
+out/
+build/
+dist/
+
+# env & secrets (OIDC vars pulled via `vercel env pull` — NEVER commit)
+.env
+.env.*
+!.env.example
+
+# vercel
+.vercel/
+
+# logs / misc
+*.log
+npm-debug.log*
+.DS_Store
+coverage/
+*.tsbuildinfo
+
+# scratch / demo recordings
+scratch/
+*.mov
+*.mp4
+.vercel
+.env*

@@ -1,0 +1,44 @@
+{
+  "_comment": "Dev-only IAM policy for IAM user 'zerorace' (account 563999587731). Lets local tooling connect to the Aurora DSQL cluster + DynamoDB table the Vercel integration provisioned, AND create/peer the multi-region DSQL clusters for the failover demo. The DEPLOYED app uses Vercel OIDC roles — this is only for the dev machine. Re-apply after editing: aws iam put-user-policy --user-name zerorace --policy-name zerorace-dev --policy-document file://infra/aws-dev-user-policy.json",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DSQLConnectAdminAnyRegion",
+      "Effect": "Allow",
+      "Action": ["dsql:DbConnect", "dsql:DbConnectAdmin"],
+      "Resource": "arn:aws:dsql:*:563999587731:cluster/*"
+    },
+    {
+      "Sid": "DSQLClusterManagement",
+      "Effect": "Allow",
+      "Action": [
+        "dsql:CreateCluster",
+        "dsql:GetCluster",
+        "dsql:UpdateCluster",
+        "dsql:DeleteCluster",
+        "dsql:ListClusters",
+        "dsql:TagResource",
+        "dsql:UntagResource",
+        "dsql:ListTagsForResource",
+        "dsql:PutMultiRegionProperties"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DynamoDBTable",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:ListTables",
+        "dynamodb:DescribeTable",
+        "dynamodb:CreateTable",
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:Query",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Resource": "arn:aws:dynamodb:ap-south-1:563999587731:table/*"
+    }
+  ]
+}
