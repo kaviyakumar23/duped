@@ -108,17 +108,31 @@ export async function warmPool(pool: AuroraDSQLPool, n: number): Promise<number>
   const held: PoolClient[] = [];
   try {
     for (let i = 0; i < n; i++) {
-      let client: PoolClient | undefined;
-      for (let attempt = 1; attempt <= 4 && !client; attempt++) {
+      let placed = false;
+      for (let attempt = 1; attempt <= 4 && !placed; attempt++) {
+        let client: PoolClient | undefined;
         try {
           client = (await pool.connect()) as unknown as PoolClient;
+          // CRITICAL: the connector mints the DSQL token LAZILY on the first query, not on
+          // connect(). Run a trivial query here so this connection authenticates NOW, while we hold
+          // it and the loop is serial — otherwise all N tokens would mint at once during the burst.
+          await client.query("SELECT 1");
+          held.push(client);
+          placed = true;
         } catch (err) {
+          // Destroy the half-open client (pass the error) so the pool won't hand it back broken.
+          if (client) {
+            try {
+              client.release(err as Error);
+            } catch {
+              /* ignore */
+            }
+          }
           if (!isTransientNetError(err) || attempt === 4) break; // give up this slot, keep the rest
           await delay(100 * attempt);
         }
       }
-      if (!client) break; // can't grow further right now — warm what we have
-      held.push(client);
+      if (!placed) break; // can't grow further right now — warm what we have
     }
     return held.length;
   } finally {
