@@ -99,13 +99,12 @@ export async function runDupeStorm(opts: Partial<DupeStormOptions> = {}): Promis
   const committedByRegion: Record<string, number> = {};
   let failoverFired = false;
 
-  // Warm both endpoints so the post-failover region is ready instantly and cold-start latency
-  // doesn't skew which endpoint absorbs the early bursts. (Concurrent token-gen DNS storms are
-  // prevented at the pool layer by the connect limiter in createDsqlPool — see lib/db/dsql.ts.)
-  await Promise.allSettled([
-    getPool("primary").query("SELECT 1"),
-    getPool("secondary").query("SELECT 1"),
-  ]);
+  // Warm each endpoint SEQUENTIALLY before the burst: the first checkout resolves (and caches) the
+  // DSQL credentials via one STS call, so the concurrent burst that follows signs locally with the
+  // cached creds — no DNS stampede. (Memoization lives in createDsqlPool; see lib/db/dsql.ts.) This
+  // also readies the post-failover region instantly and removes cold-start skew on the early waves.
+  await getPool("primary").query("SELECT 1");
+  await getPool("secondary").query("SELECT 1");
 
   const start = Date.now();
 
@@ -277,11 +276,10 @@ export async function runGoldStorm(opts: Partial<GoldStormOptions> = {}): Promis
   const committedByRegion: Record<string, number> = {};
   let failoverFired = false;
 
+  // Warm sequentially so the cold credential resolve (one STS call) is cached before the burst.
+  await getPool("primary").query("SELECT 1");
   if (merged.failoverAfterMs && merged.failoverAfterMs > 0) {
-    await Promise.allSettled([
-      getPool("primary").query("SELECT 1"),
-      getPool("secondary").query("SELECT 1"),
-    ]);
+    await getPool("secondary").query("SELECT 1");
   }
 
   // Conserved-supply proof: read the total gold BEFORE the storm.
