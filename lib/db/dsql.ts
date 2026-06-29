@@ -1,5 +1,24 @@
 import { AuroraDSQLPool } from "@aws/aurora-dsql-node-postgres-connector";
 import type { PoolClient } from "pg";
+import pLimit from "p-limit";
+
+/**
+ * THE DNS GUARD. The DSQL connector regenerates the IAM auth token on EVERY `pool.connect()` (it
+ * sets `options.password = await getDSQLToken()` before each checkout). At cold start each token
+ * generation does an STS `AssumeRole` → a `getaddrinfo` to `sts.<region>.amazonaws.com`. A burst of
+ * concurrent checkouts (the swarm) therefore fires N concurrent DNS lookups, and Vercel's resolver
+ * returns `EBUSY` once N is large — failing the whole storm. We cap CONCURRENT checkouts (not job
+ * concurrency) with a shared limiter, so token generation never stampedes DNS; the kernel still runs
+ * its jobs at full concurrency and produces genuine OCC contention. Shared across all pools because
+ * every pool resolves the same STS host. Tunable via DSQL_CONNECT_CONCURRENCY (default 3).
+ */
+const connectLimit = pLimit(Math.max(1, Number(process.env.DSQL_CONNECT_CONCURRENCY ?? 3)));
+
+type ConnectCallback = (
+  err: Error | undefined,
+  client: PoolClient | undefined,
+  done: (release?: unknown) => void,
+) => void;
 
 /**
  * Aurora DSQL connection (truth core). DSQL requires IAM auth with time-bound tokens; the
@@ -66,82 +85,38 @@ export function createDsqlPool(opts: DsqlPoolOptions): AuroraDSQLPool {
     console.warn(`[dsql:${opts.label ?? "pool"}] idle client error (non-fatal): ${err.message}`);
   });
 
-  return pool;
-}
+  // Route every checkout (both the promise form used by the kernel's transactions AND the callback
+  // form pg uses internally for pool.query) through the shared limiter, so the connector's
+  // per-checkout token generation can't fire more than DSQL_CONNECT_CONCURRENCY STS lookups at once.
+  const rawConnect = pool.connect.bind(pool) as {
+    (): Promise<PoolClient>;
+    (cb: ConnectCallback): void;
+  };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Serverless DNS guard — pre-warming the pool.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * DSQL mints a fresh IAM auth token per new connection, and each mint does an STS DNS lookup
- * (`sts.<region>.amazonaws.com`). When a swarm opens many connections at once, those `getaddrinfo`
- * calls fire concurrently and Vercel's resolver returns `EBUSY` — the whole storm fails. These are
- * transient and worth a short retry.
- */
-const TRANSIENT_NET = /EBUSY|EAI_AGAIN|ETIMEDOUT|ENOTFOUND|ECONNRESET|getaddrinfo/i;
-
-function isTransientNetError(err: unknown): boolean {
-  const code = (err as { code?: unknown } | null)?.code;
-  const msg = (err as { message?: unknown } | null)?.message;
-  return (
-    (typeof code === "string" && TRANSIENT_NET.test(code)) ||
-    (typeof msg === "string" && TRANSIENT_NET.test(msg))
-  );
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Pre-open up to `n` connections on `pool` SEQUENTIALLY (one `await` at a time) so the per-connection
- * DSQL token mints — each an STS DNS lookup — never fire concurrently and trip `getaddrinfo EBUSY`
- * on Vercel. Connections are held until all are open (forcing the pool to create distinct ones), then
- * released, leaving `n` warm idle connections the swarm reuses with zero new mints. A stray transient
- * DNS error is retried with a short backoff. Best-effort: never throws; returns how many it warmed.
- *
- * Cap `n` at the pool's max (DSQL_POOL_MAX, default 10) — asking for more than max would block the
- * extra `connect()` calls (no client can free up while we hold them) until the checkout timeout.
- */
-export async function warmPool(pool: AuroraDSQLPool, n: number): Promise<number> {
-  const held: PoolClient[] = [];
-  try {
-    for (let i = 0; i < n; i++) {
-      let placed = false;
-      for (let attempt = 1; attempt <= 4 && !placed; attempt++) {
-        let client: PoolClient | undefined;
-        try {
-          client = (await pool.connect()) as unknown as PoolClient;
-          // CRITICAL: the connector mints the DSQL token LAZILY on the first query, not on
-          // connect(). Run a trivial query here so this connection authenticates NOW, while we hold
-          // it and the loop is serial — otherwise all N tokens would mint at once during the burst.
-          await client.query("SELECT 1");
-          held.push(client);
-          placed = true;
-        } catch (err) {
-          // Destroy the half-open client (pass the error) so the pool won't hand it back broken.
-          if (client) {
-            try {
-              client.release(err as Error);
-            } catch {
-              /* ignore */
-            }
-          }
-          if (!isTransientNetError(err) || attempt === 4) break; // give up this slot, keep the rest
-          await delay(100 * attempt);
-        }
-      }
-      if (!placed) break; // can't grow further right now — warm what we have
+  function limitedConnect(): Promise<PoolClient>;
+  function limitedConnect(cb: ConnectCallback): void;
+  function limitedConnect(cb?: ConnectCallback): Promise<PoolClient> | void {
+    if (cb) {
+      // Callback form: hold a limiter slot until the connection is acquired (cb invoked), then free
+      // it — the caller releases the client later, independently of the throttle.
+      void connectLimit(
+        () =>
+          new Promise<void>((resolve) => {
+            rawConnect((err, client, done) => {
+              try {
+                cb(err, client, done);
+              } finally {
+                resolve();
+              }
+            });
+          }),
+      );
+      return;
     }
-    return held.length;
-  } finally {
-    for (const c of held) {
-      try {
-        c.release();
-      } catch {
-        /* ignore — releasing a warm client never matters */
-      }
-    }
+    return connectLimit(() => rawConnect());
   }
+
+  (pool as unknown as { connect: typeof limitedConnect }).connect = limitedConnect;
+
+  return pool;
 }
