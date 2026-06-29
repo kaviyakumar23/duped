@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import pLimit from "p-limit";
+import { warmPool } from "../db/dsql";
 import { failoverTo, getActiveRegion, getPool } from "../db/region-router";
 import { DEMO, poolKeyToRegion } from "../demo/config";
 import { executeTrade } from "../kernel/trade";
@@ -99,14 +100,13 @@ export async function runDupeStorm(opts: Partial<DupeStormOptions> = {}): Promis
   const committedByRegion: Record<string, number> = {};
   let failoverFired = false;
 
-  // Warm BOTH endpoints so the post-failover region is ready instantly and cold-start latency
-  // doesn't skew which endpoint absorbs the early bursts.
-  if (merged.failoverAfterMs && merged.failoverAfterMs > 0) {
-    await Promise.allSettled([
-      getPool("primary").query("SELECT 1"),
-      getPool("secondary").query("SELECT 1"),
-    ]);
-  }
+  // Serverless DNS guard: pre-open each endpoint's connections SEQUENTIALLY before the burst so the
+  // per-connection DSQL token mints (STS DNS lookups) don't fire concurrently and trip EBUSY on
+  // Vercel. The dupe storm routes cross-region jobs to the peer endpoint, so warm BOTH pools. This
+  // also readies the post-failover region instantly and removes cold-start skew on the early waves.
+  const warmN = Math.min(merged.concurrency, Number(process.env.DSQL_POOL_MAX ?? 10));
+  await warmPool(getPool("primary"), warmN);
+  await warmPool(getPool("secondary"), warmN);
 
   const start = Date.now();
 
@@ -278,11 +278,12 @@ export async function runGoldStorm(opts: Partial<GoldStormOptions> = {}): Promis
   const committedByRegion: Record<string, number> = {};
   let failoverFired = false;
 
+  // Serverless DNS guard (see runDupeStorm): pre-open connections sequentially so concurrent token
+  // mints don't trip EBUSY. Warm the active endpoint; warm the peer too when a failover is scheduled.
+  const warmN = Math.min(merged.concurrency, Number(process.env.DSQL_POOL_MAX ?? 10));
+  await warmPool(getPool("primary"), warmN);
   if (merged.failoverAfterMs && merged.failoverAfterMs > 0) {
-    await Promise.allSettled([
-      getPool("primary").query("SELECT 1"),
-      getPool("secondary").query("SELECT 1"),
-    ]);
+    await warmPool(getPool("secondary"), warmN);
   }
 
   // Conserved-supply proof: read the total gold BEFORE the storm.
@@ -426,6 +427,9 @@ export async function runMarketStorm(
   let conflictExhausted = 0;
   let errors = 0;
   const committedByRegion: Record<string, number> = {};
+
+  // Serverless DNS guard (see runDupeStorm): warm the active endpoint sequentially before the burst.
+  await warmPool(primary, Math.min(merged.concurrency, Number(process.env.DSQL_POOL_MAX ?? 10)));
 
   const start = Date.now();
   await Promise.all(

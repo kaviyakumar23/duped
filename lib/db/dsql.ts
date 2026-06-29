@@ -1,4 +1,5 @@
 import { AuroraDSQLPool } from "@aws/aurora-dsql-node-postgres-connector";
+import type { PoolClient } from "pg";
 
 /**
  * Aurora DSQL connection (truth core). DSQL requires IAM auth with time-bound tokens; the
@@ -66,4 +67,67 @@ export function createDsqlPool(opts: DsqlPoolOptions): AuroraDSQLPool {
   });
 
   return pool;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Serverless DNS guard — pre-warming the pool.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * DSQL mints a fresh IAM auth token per new connection, and each mint does an STS DNS lookup
+ * (`sts.<region>.amazonaws.com`). When a swarm opens many connections at once, those `getaddrinfo`
+ * calls fire concurrently and Vercel's resolver returns `EBUSY` — the whole storm fails. These are
+ * transient and worth a short retry.
+ */
+const TRANSIENT_NET = /EBUSY|EAI_AGAIN|ETIMEDOUT|ENOTFOUND|ECONNRESET|getaddrinfo/i;
+
+function isTransientNetError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  const msg = (err as { message?: unknown } | null)?.message;
+  return (
+    (typeof code === "string" && TRANSIENT_NET.test(code)) ||
+    (typeof msg === "string" && TRANSIENT_NET.test(msg))
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Pre-open up to `n` connections on `pool` SEQUENTIALLY (one `await` at a time) so the per-connection
+ * DSQL token mints — each an STS DNS lookup — never fire concurrently and trip `getaddrinfo EBUSY`
+ * on Vercel. Connections are held until all are open (forcing the pool to create distinct ones), then
+ * released, leaving `n` warm idle connections the swarm reuses with zero new mints. A stray transient
+ * DNS error is retried with a short backoff. Best-effort: never throws; returns how many it warmed.
+ *
+ * Cap `n` at the pool's max (DSQL_POOL_MAX, default 10) — asking for more than max would block the
+ * extra `connect()` calls (no client can free up while we hold them) until the checkout timeout.
+ */
+export async function warmPool(pool: AuroraDSQLPool, n: number): Promise<number> {
+  const held: PoolClient[] = [];
+  try {
+    for (let i = 0; i < n; i++) {
+      let client: PoolClient | undefined;
+      for (let attempt = 1; attempt <= 4 && !client; attempt++) {
+        try {
+          client = (await pool.connect()) as unknown as PoolClient;
+        } catch (err) {
+          if (!isTransientNetError(err) || attempt === 4) break; // give up this slot, keep the rest
+          await delay(100 * attempt);
+        }
+      }
+      if (!client) break; // can't grow further right now — warm what we have
+      held.push(client);
+    }
+    return held.length;
+  } finally {
+    for (const c of held) {
+      try {
+        c.release();
+      } catch {
+        /* ignore — releasing a warm client never matters */
+      }
+    }
+  }
 }
